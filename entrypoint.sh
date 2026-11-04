@@ -34,11 +34,10 @@ if [[ ! -s "$WINEPREFIX/system.reg" ]]; then
   wineboot --init
 fi
 
-# No host-side setup script is needed. Create config using the game's own
-# sample only when missing; never replace an existing serverconfig.json.
-if [[ ! -f /server/MZClient/Saved/Config/serverconfig.json ]]; then
-  python3 /usr/local/lib/gsb/serverctl.py init --server-dir /server
-fi
+# No host-side setup script is needed. On first boot, initialize from the
+# game's sample; on every boot, apply ONLY GSB_SERVER_* values explicitly
+# supplied by the operator. Unset values never overwrite an existing config.
+python3 /usr/local/lib/gsb/serverctl.py configure-env --server-dir /server
 
 # The Microsoft VC++ x64 runtime was the blocker in the original Windows
 # error dialog. Keep the prefix persistent, and verify the runtime in the

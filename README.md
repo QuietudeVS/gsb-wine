@@ -1,22 +1,23 @@
-# God Save Birmingham — Docker v10 (host-script-free image)
+# God Save Birmingham — Docker v10.1.0
 
-**One Docker image; no host-side `setup.sh`, `gsbctl`, cron, or Compose files.**
+A **self-contained Linux/amd64 Docker image**, using Wine to run the Windows dedicated server. **No host-side setup scripts** and no host-side `gsbctl` required. Run by **one `docker run` command** or by the included **optional `compose.yaml`**.
 
-The image packages Ubuntu 24.04, Wine, Xvfb, runtime libraries, console commands, a text console reader, and autosave/graceful-stop supervision. It **does not include the Windows game server**. Each server owner must have a legitimate Windows dedicated-server installation, such as `/home/gsb/GSBPTESTSVR`, with `MZServer.exe` and its accompanying files.
+**Published image location (after releasing v10.1.0):** `ghcr.io/quietudevs/gsb-wine:v10.1.0`.
 
-> **Release state:** The v10 sources are prepared and have local syntax/unit checks, but v10 has **not** been built against Docker or tested with the real game in this workspace. Docker v8 and native Linux v2 were previously proven on real hosts. The GHCR image is **not yet published**. Do not use the example GHCR address until the workflow has successfully published an image and you have made the package public.
+> Release status: this v10.1.0 source has passed local shell/Python tests, but has not yet been built on GitHub or tested with the live GSB game. The previously published `v10.0.1` image is a distinct release; it does **not** support the new `GSB_SERVER_*` settings. Never claim v10.1.0 is published until the Actions job succeeds.
 
-## End-user setup (after image is published)
+## Requirements
 
-Host prerequisites: Linux amd64 Docker engine, the Windows server files in a writable host directory, and free network ports. By default the server uses UDP `7777` and `27015` (check actual game config). `--network host` mirrors the proven Docker v8 behavior; no `-p` mappings are needed. Configure a firewall/router separately.
+- Linux host with Docker Engine and Linux/amd64 support; source game files for the Windows GSB dedicated server including `MZServer.exe`, DLLs, and the `MZClient` folder.
+- A **writable persistent directory** on the host, e.g. `$HOME/GSBPTESTSVR`. The image does **not** distribute/download proprietary game files.
+- Free game ports. This uses host networking, matching the proven earlier Docker deployment; default game UDP ports are `7777` and `27015`. Configure your firewall/router separately.
+- Do not run another GSB process against the same folder at the same time.
 
-You can **skip `docker pull`**: `docker run` will automatically pull the image if it is not present.
+## Option A: single `docker run` command
+
+No setup scripts, Compose files, or image build. The image pulls automatically if it is absent:
 
 ```bash
-# Optional: pre-pull the published image
-docker pull ghcr.io/OWNER/REPOSITORY:v10.0.0
-
-# One-time start: no host scripts; host directory must already exist.
 docker run -dit \
   --name gsb \
   --platform linux/amd64 \
@@ -27,93 +28,113 @@ docker run -dit \
   --security-opt no-new-privileges \
   -e GSB_UID="$(id -u)" \
   -e GSB_GID="$(id -g)" \
+  -e GSB_SERVER_NAME="My Birmingham Server" \
+  -e GSB_SERVER_DESCRIPTION="Survival with friends" \
+  -e GSB_SERVER_PORT=7777 \
+  -e GSB_SERVER_MAX_PLAYERS=8 \
+  -e GSB_SERVER_PUBLIC=true \
   --mount type=bind,source="$HOME/GSBPTESTSVR",target=/server \
   --mount type=volume,source=gsb-wine-data,target=/home/gsb/.wine-gsb \
-  ghcr.io/OWNER/REPOSITORY:v10.0.0
+  ghcr.io/quietudevs/gsb-wine:v10.1.0
 ```
 
-Replace `OWNER/REPOSITORY` with the actual GitHub repository, and adjust `$HOME/GSBPTESTSVR` to the **absolute** location of your own Windows server files. The image does not download the game. The directory must be **writable** by the UID/GID supplied. The named Docker volume keeps the Wine prefix across container recreation, and `SaveGame.sav` remains directly in the bind-mounted host game folder.
+You can omit **any** `GSB_SERVER_*` lines to keep the preexisting `serverconfig.json` value for that field. On first boot, missing configuration is created from the game's own sample file. Existing fields not specified in the command are preserved. Supplied overrides are applied at **each container start**, so if you later change a setting manually using `gsbctl configure`, remove that setting's environment variable before recreating the container if you want the manual change to persist.
 
-The `-it` flags preserve the allocated interactive TTY used by our previously working Docker/Wine setup; console input still uses the Wine/Xvfb window internally.
+If already running another GSB container, stop it gracefully before running this command with the same folder or container name. Do not simultaneously run v8/v9/v10 or native Wine against the same saves.
 
-The image initializes `MZClient/Saved/Config/serverconfig.json` from the **game's own sample** when missing; it never overwrites an existing config. First launch may take several minutes for Wine prefix creation and Microsoft VC++ redistribution. Network access is required on first launch to obtain the runtime if not already installed.
+### Configuration options
 
-## Normal operations (standard Docker commands)
+| Env variable | Description | If omitted |
+|---|---|---|
+| `GSB_SERVER_NAME` | Game server display name | Preserve saved value / game default |
+| `GSB_SERVER_DESCRIPTION` | Server description | Preserve |
+| `GSB_SERVER_PORT` | Game listen port, 1–65535 | Preserve |
+| `GSB_SERVER_MAX_PLAYERS` | Positive integer | Preserve |
+| `GSB_SERVER_PUBLIC` | `true` or `false` | Preserve |
+| `GSB_SERVER_PASSWORD` | Game join password (including `""` to clear) | Preserve |
+| `GSB_SERVER_PASSWORD_FILE` | File path inside container holding the join password | Preserve |
+| `GSB_AUTOSAVE_ENABLED` | `1` (default) or `0` | Autosave on |
+| `GSB_AUTOSAVE_INTERVAL_SECONDS` | Autosave interval, defaults `1800` | Every 30 minutes |
+| `GSB_UID`, `GSB_GID` | Host file ownership IDs | Both default to 1000 in image |
+
+The game config is persisted in `/server/MZClient/Saved/Config/serverconfig.json`, i.e. the bind-mounted host directory. The image only edits existing keys recognized from the game's sample; it does not synthesize unrecognized keys.
+
+**Security:** Avoid `-e GSB_SERVER_PASSWORD=...` for real passwords: Docker environment variables can be exposed by Docker inspect, process inspection and other privileged tooling. To configure a secret interactively after launch, use `docker exec -it gsb gsbctl configure --password-prompt`. Alternatively, mount a password file read-only and provide `-e GSB_SERVER_PASSWORD_FILE=/run/secrets/gsb_password`; the file must be readable to the in-container `gsb` user. The password file must not be committed to GitHub. Both password environment variants cannot be set at once.
+
+## Option B: optional Docker Compose
+
+The **same image** can be run by `compose.yaml` (included in this repository). Copy `compose.yaml` to your Linux deployment folder. By default it expects a sibling `./GSBPTESTSVR` containing the game files, or set `GSB_SERVER_DIR` in `.env` to an absolute host path.
+
+An optional `.env.example` is included to show available settings. To customize settings, copy it to `.env` alongside `compose.yaml` and uncomment only your desired values. The Compose file uses `- GSB_SERVER_NAME`-style pass-through so unset settings are **not** forwarded to the container. Your `.env` belongs on your deployment machine, not in your public GitHub repository.
 
 ```bash
-docker logs -f gsb                    # startup logs and 30-min autosave
-
-docker exec gsb gsbctl probe         # find MZ Server Console
-docker exec gsb gsbctl status        # display server status
-docker exec gsb gsbctl players       # player count/list
-docker exec gsb gsbctl save          # save without stopping
-docker exec gsb gsbctl console       # full raw Windows console snapshot
-
-docker stop -t 120 gsb               # in-game 'shutdown' = save + exit
-docker start gsb                     # restart later
-docker restart -t 120 gsb            # graceful restart
+# In the directory containing compose.yaml:
+cp .env.example .env                 # optional; edit GSB_SERVER_DIR, UID/GID and server settings
+# If your host UID/GID aren't 1000, set GSB_UID=$(id -u), GSB_GID=$(id -g) in .env.
+docker compose up -d
+docker compose logs -f gsb
 ```
 
-`docker exec gsb gsbctl` runs console and Wine commands as the non-root `gsb` user even though `docker exec` defaults to root. Each command reports console text where supported. **Console text is a snapshot**, and Wine may retain or partially overwrite older lines; the filter does not modify the actual game or console.
+If you don't want to create an `.env`, configure the optional settings through shell environment variables, e.g. `GSB_SERVER_NAME='Birmingham' GSB_SERVER_MAX_PLAYERS=8 docker compose up -d`. If a port other than 7777 is chosen, open it in your firewall/router; host networking means no `ports:` mapping.
 
-> **Do not use `docker kill`, `docker rm -f`, or a too-short stop timeout.** Docker sends SIGKILL if it hits the timeout. A forced kill or power failure cannot guarantee the world is saved. Do not simultaneously run this container and a native/Docker game instance against the same world directory.
-
-### Server settings
+### Game commands (both deployment methods)
 
 ```bash
-# See current game settings (password hidden)
-docker exec gsb gsbctl configure
-
-# Configure using the game's original schema; settings may require a restart
-docker exec gsb gsbctl configure --name 'My Birmingham' --max-players 8 --public false
-```
-
-The serverconfig file is owned by the host user and remains at `~/GSBPTESTSVR/MZClient/Saved/Config/serverconfig.json` (if that is the host bind mount). To set a password without shell history exposure, use `docker exec -it gsb gsbctl configure --password-prompt` (a terminal is required). Never include secrets in a published repository or screenshots.
-
-### Autosave and manual backups
-
-Autosave is **enabled every 30 minutes**; it runs completely inside the image, calls the same game `save` console command, and does not generate archives. Optional environment flags in `docker run`:
-
-```text
--e GSB_AUTOSAVE_ENABLED=0
--e GSB_AUTOSAVE_INTERVAL_SECONDS=1800
-```
-
-For an on-demand snapshot archive (separate from the game's periodic backup `.sav` files):
-
-```bash
+docker exec gsb gsbctl probe
+docker exec gsb gsbctl status
+docker exec gsb gsbctl players
 docker exec gsb gsbctl save
+docker exec gsb gsbctl console
+# Show/change a setting without environment variables:
+docker exec gsb gsbctl configure
+# On-demand on-disk backup (make sure world has saved first):
 docker exec gsb gsbctl backup
+
+# The game 'shutdown' command saves the world and exits cleanly:
+docker stop -t 120 gsb
+# Or with Compose:
+docker compose stop gsb
 ```
 
-`backup` writes a `.tar.gz` under `/server/.gsb-backups` (so it persists in the host game directory). It copies saved files **on disk** and does not itself trigger a game save. Store external copies of backups; a backup next to game files does not protect against a disk failure.
+Autosave runs inside the container every 30 minutes by default. Normal Docker stop is supervised: Docker's SIGTERM is forwarded as the game's graceful `shutdown` console command. Docker `kill`, `rm -f`, power loss or a stop timeout cannot guarantee save completion. The console reader can show prior responses; the text filter removes some known corrupted console lines but does not modify game memory.
 
-### Image update without losing saved data
+## Updating the image later
 
-1. Make a backup and use `docker stop -t 120 gsb`.
-2. Pull the new image with `docker pull ghcr.io/OWNER/REPOSITORY:NEW_TAG`.
-3. `docker rm gsb` (do **not** delete your Windows server files or the `gsb-wine-data` volume).
-4. Repeat the `docker run` command with the new tag, same bind mount, same volume, UID/GID.
+**Docker can pull new images, but `docker pull` by itself does not update a running container.** You must recreate the container while keeping the same mounts.
 
-When `--restart unless-stopped` is used, Docker restores a previously running container at boot when Docker starts, but does not revive a container you intentionally stopped. A real reboot test is still recommended.
+### `docker run` users
 
-## Publishing to GitHub Container Registry (maintainer)
+```bash
+# 1. Save and make an optional backup:
+docker exec gsb gsbctl save
+# 2. Stop gracefully and remove only the container, NOT the saved data:
+docker stop -t 120 gsb
+docker rm gsb
+# 3. Pull the new version:
+docker pull ghcr.io/quietudevs/gsb-wine:NEW_VERSION
+# 4. Repeat the original docker run command, changing only the image tag.
+#    Reuse the EXACT same /server bind mount and named volume gsb-wine-data.
+```
 
-1. Create a GitHub repo (e.g. `YOURNAME/gsb-wine`).
-2. Commit the contents of **this source kit at repository root** (including `.github/workflows/publish-image.yml`, `Dockerfile`, shell scripts, reader source/executable). **Never commit the game files**, your `serverconfig.json`, your `.env`, or saves.
-3. Push tag `v10.0.0`. The GitHub Actions workflow builds `linux/amd64` and pushes image `ghcr.io/YOURNAME/REPOSITORY:v10.0.0` plus `:latest` using the repository-scoped `GITHUB_TOKEN` with `packages: write`.
-4. GitHub Container Registry packages are **private by default**. In your package settings, set visibility to **Public** to let others pull without logging in.
-5. Test the published image on a spare server directory before recommending it for production. Check in-game save, 30-minute autosave, `docker stop -t 120` and restart persistence.
+### Compose users
 
-See [GitHub's official GHCR documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) for public visibility and package permissions.
+Change `GSB_IMAGE_TAG` in `.env` (or update the `image:` tag in `compose.yaml`) to the new version, then:
 
-## Development and known limitations
+```bash
+docker compose pull
+docker compose up -d
+```
 
-- Wine/Windows server targets `linux/amd64` only. An ARM Linux host must support amd64 emulation and may be too slow.
-- Ubuntu 24.04 in container works independently of a Ubuntu 26 host; users only need Docker.
-- First-run VC++ installer downloads an executable from a Microsoft HTTPS URL. Failures must be handled according to logs.
-- `GSB_UID` and `GSB_GID` default to `1000:1000`. Provide `$(id -u)` and `$(id -g)` in the run command for hosts with different IDs. This helps keep game files writable without root-running the game. Existing volume ownership from other IDs may require manual correction.
-- The game uses the Xvfb virtual desktop internally. Console windows are auto-discovered rather than identified by a persistent X11 window ID.
-- Default UDP ports are based on observed prior game config. Check your actual server settings and network topology.
-- No automated image publication has occurred in this sandbox; the workflow needs your GitHub repository and Actions permissions.
-- The v10 changes require a real Docker image build and live server test before relying on them. Source unit checks cannot substitute for a full Wine/game integration test.
+Compose will stop/recreate containers whose images changed, preserving bind mounts and named volumes. The `stop_grace_period: 120s` gives the game time to shut down gracefully. Versioned image tags are preferable to mutable `latest`. **Do not run `docker compose down -v`**, which removes named volumes. Docker does not automatically apply updates on a timer unless you separately configure an updater. Docker's official documentation covers this behavior.
+
+## GitHub publishing (maintainers)
+
+Image has a public registry address only once the GitHub Actions job for tag `v10.1.0` succeeds. The included `.github/workflows/publish-image.yml` builds the image for Linux/amd64, tests scripts, and publishes `ghcr.io/<repo-owner>/<repo-name>:v10.1.0` and `:latest` using `GITHUB_TOKEN`.
+
+To publish from a Windows browser, upload the changed v10.1.0 source files to **the root** of the existing `QuietudeVS/gsb-wine` GitHub repository, commit the changes on `main`, and **only then** create the new release/tag `v10.1.0` targeted at `main`. Don't delete the existing `.github/workflows/publish-image.yml` workflow; it's unchanged. Watch the workflow under the **Actions** tab. If the GHCR package is already public, its new version should inherit package visibility.
+
+Do **not** upload game binaries, save games, real passwords, or Wine data to GitHub. See `GITHUB_UPDATE_BROWSER.md` for specific click-by-click instructions.
+
+## Validation status
+
+The shell syntax checks, Python compilation, local unit tests for configuration/backup and environment override behavior, and YAML parsing passed locally. The optional Compose file has been statically validated but has not been tested with a Docker daemon here. **The real v10.1.0 image startup, runtime settings, and graceful stop still need verification on a live host.** Proven production behavior in previous versions does not constitute a v10.1.0 live test.

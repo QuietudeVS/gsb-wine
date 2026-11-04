@@ -1,25 +1,42 @@
-GSB Docker v10 — end-user quickstart (NO host scripts)
+GSB Docker v10.1.0 — two ways to deploy (NO host scripts)
 
-1. You already have an existing Windows GSB dedicated server directory containing
-   MZServer.exe, steamclient DLLs, and the MZClient folder.
-2. Publish the GHCR image first (see README.md). It has NOT been published yet.
-3. Replace ghcr.io/OWNER/REPOSITORY with your actual image path and run:
+The published image will be ghcr.io/quietudevs/gsb-wine:v10.1.0 AFTER
+GitHub Actions publishes the v10.1.0 tag. It is NOT yet published.
+
+Prerequisite: You own Windows game server files in ~/GSBPTESTSVR including
+MZServer.exe. Docker on a Linux x86-64 host; UDP game ports accessible.
+
+OPTION A — single docker run (change folder / settings):
 
 docker run -dit --name gsb --platform linux/amd64 --network host \
   --restart unless-stopped --stop-timeout 120 --shm-size 512m \
+  --security-opt no-new-privileges \
   -e GSB_UID="$(id -u)" -e GSB_GID="$(id -g)" \
+  -e GSB_SERVER_NAME="My Birmingham Server" \
+  -e GSB_SERVER_MAX_PLAYERS=8 \
+  -e GSB_SERVER_PUBLIC=true \
   --mount type=bind,source="$HOME/GSBPTESTSVR",target=/server \
   --mount type=volume,source=gsb-wine-data,target=/home/gsb/.wine-gsb \
-  ghcr.io/OWNER/REPOSITORY:v10.0.0
+  ghcr.io/quietudevs/gsb-wine:v10.1.0
 
-MANAGE:
-  docker logs -f gsb
-  docker exec gsb gsbctl probe
+OPTION B — optional Compose (place compose.yaml beside GSBPTESTSVR):
+
+  cp .env.example .env    # optional; edit values to suit
+  docker compose up -d
+
+COMMANDS:
   docker exec gsb gsbctl status
   docker exec gsb gsbctl players
   docker exec gsb gsbctl save
-  docker stop -t 120 gsb
-  docker start gsb
+  docker stop -t 120 gsb                 # graceful game save and shutdown
 
-Autosave: enabled every 30 minutes; normal stop sends game's save+shutdown.
-Do not use docker kill or run two servers against one save folder.
+UPDATING:
+  docker pull ghcr.io/quietudevs/gsb-wine:NEW_VERSION
+  docker stop -t 120 gsb && docker rm gsb
+  # Re-run OPTION A with new tag, SAME mounts and UID/GID.
+
+  OR (for Compose, after setting GSB_IMAGE_TAG to the new version):
+  docker compose pull && docker compose up -d
+
+IMPORTANT: pulling does not replace a running container. Preserve /server
+and the named volume gsb-wine-data; never use docker kill for normal stops.

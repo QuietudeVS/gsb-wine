@@ -1,0 +1,44 @@
+# God Save Birmingham — optional Docker Compose deployment.
+# Store alongside a GSBPTESTSVR folder or set GSB_SERVER_DIR in .env / shell.
+# Image is published via the included GitHub Actions tag workflow.
+services:
+  gsb:
+    image: ghcr.io/quietudevs/gsb-wine:${GSB_IMAGE_TAG:-v10.1.0}
+    container_name: gsb
+    platform: linux/amd64
+    network_mode: host
+    tty: true
+    stdin_open: true
+    restart: unless-stopped
+    stop_grace_period: 120s
+    shm_size: 512m
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - GSB_UID=${GSB_UID:-1000}
+      - GSB_GID=${GSB_GID:-1000}
+      # Optional: values are omitted completely if unset, preserving the
+      # existing serverconfig.json instead of replacing settings with blanks.
+      - GSB_SERVER_NAME
+      - GSB_SERVER_DESCRIPTION
+      - GSB_SERVER_PORT
+      - GSB_SERVER_MAX_PLAYERS
+      - GSB_SERVER_PUBLIC
+      - GSB_SERVER_PASSWORD
+      - GSB_SERVER_PASSWORD_FILE
+      - GSB_AUTOSAVE_ENABLED
+      - GSB_AUTOSAVE_INTERVAL_SECONDS
+    volumes:
+      - type: bind
+        source: ${GSB_SERVER_DIR:-./GSBPTESTSVR}
+        target: /server
+        bind:
+          create_host_path: false
+      - type: volume
+        source: gsb-wine-data
+        target: /home/gsb/.wine-gsb
+
+volumes:
+  gsb-wine-data:
+    # Reuse the same persistent Wine volume as the one-command docker run mode.
+    name: gsb-wine-data

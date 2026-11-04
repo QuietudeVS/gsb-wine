@@ -23,6 +23,16 @@ HERE = Path(__file__).resolve().parent
 CONFIG_REL = Path('MZClient/Saved/Config/serverconfig.json')
 SAMPLE_REL = Path('MZClient/Saved/Config/serverconfig_sample.json')
 FIELDS = ('port', 'name', 'description', 'public', 'password', 'maxPlayers')
+# Only explicitly supplied environment variables are applied. Absence means
+# preserve the existing game setting (or use the game's own sample on first run).
+ENV_FIELDS = {
+    'GSB_SERVER_PORT': 'port',
+    'GSB_SERVER_NAME': 'name',
+    'GSB_SERVER_DESCRIPTION': 'description',
+    'GSB_SERVER_PUBLIC': 'public',
+    'GSB_SERVER_PASSWORD': 'password',
+    'GSB_SERVER_MAX_PLAYERS': 'maxPlayers',
+}
 ALIASES = {
     'port': ('port', 'serverport', 'gameport', 'listenport'),
     'name': ('name', 'servername', 'serverdisplayname'),
@@ -292,6 +302,74 @@ def configure(args):
     display_config(obj)
 
 
+def configure_from_environment(args):
+    """Initialize on first run and apply only explicitly supplied env values.
+
+    Do not pass a password on the process command line or log its value.
+    GSB_SERVER_PASSWORD_FILE is a safer alternative to GSB_SERVER_PASSWORD.
+    """
+    server_dir = Path(args.server_dir).resolve() if args.server_dir else server_dir_from_env()
+    sample_path, config_path = config_paths(server_dir)
+    sample = read_config(sample_path)
+    exists = config_path.is_file()
+    obj = read_config(config_path) if exists else copy.deepcopy(sample)
+    if not exists:
+        print('[gsb] Created config from the game-supplied sample defaults.')
+
+    changes = {}
+    for name, field in ENV_FIELDS.items():
+        if name not in os.environ:
+            continue
+        value = os.environ[name]
+        if field == 'port':
+            try:
+                value = int(value)
+            except ValueError:
+                fail('GSB_SERVER_PORT must be an integer')
+            if not (1 <= value <= 65535):
+                fail('GSB_SERVER_PORT must be between 1 and 65535')
+        elif field == 'maxPlayers':
+            try:
+                value = int(value)
+            except ValueError:
+                fail('GSB_SERVER_MAX_PLAYERS must be an integer')
+            if value < 1:
+                fail('GSB_SERVER_MAX_PLAYERS must be positive')
+        elif field == 'public':
+            value = parse_bool(value)
+        elif field == 'name' and not value.strip():
+            fail('GSB_SERVER_NAME must be non-empty')
+        changes[field] = value
+
+    if 'GSB_SERVER_PASSWORD_FILE' in os.environ:
+        if 'password' in changes:
+            fail('Set only one of GSB_SERVER_PASSWORD and GSB_SERVER_PASSWORD_FILE')
+        secret_path = Path(os.environ['GSB_SERVER_PASSWORD_FILE'])
+        try:
+            # Strip only trailing newlines commonly introduced by text editors.
+            changes['password'] = secret_path.read_text(encoding='utf-8').rstrip('\r\n')
+        except (OSError, UnicodeError) as exc:
+            fail(f'Could not read GSB_SERVER_PASSWORD_FILE: {exc}')
+
+    updated = []
+    for field, value in changes.items():
+        path = resolve(obj, field)
+        # Preserve existing data, including fields we don't know about.
+        old = value_at(obj, path)
+        if old == value:
+            continue
+        apply_updates(obj, {field: value})
+        updated.append(field)
+    if not exists or updated:
+        write_config(config_path, obj)
+        print(f'[gsb] Configuration ready: {config_path}')
+    if updated:
+        print('[gsb] Applied explicit environment overrides: ' + ', '.join(updated))
+    else:
+        print('[gsb] No game-setting changes needed; existing configuration preserved.')
+    display_config(obj)
+
+
 def backup(args):
     server_dir = Path(args.server_dir).resolve() if args.server_dir else server_dir_from_env()
     saved = server_dir / 'MZClient/Saved'
@@ -355,12 +433,16 @@ def main():
         p = subs.add_parser(cmd, help='Initialize or edit six supported game settings')
         p.add_argument('--server-dir', help='Game directory (default /server)')
         add_config_options(p)
+    p = subs.add_parser('configure-env', help='Initialize config and apply only explicit GSB_SERVER_* variables')
+    p.add_argument('--server-dir', help='Game directory (default /server)')
     p = subs.add_parser('backup', help='Manually back up on-disk saves and configuration')
     p.add_argument('--server-dir', help='Game directory (default /server)')
     p.add_argument('--output', help='Backup destination (default ./backups/)')
     args = parser.parse_args()
     if args.command in ('init', 'configure'):
         configure(args)
+    elif args.command == 'configure-env':
+        configure_from_environment(args)
     else:
         backup(args)
 
