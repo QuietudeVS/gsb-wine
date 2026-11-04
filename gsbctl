@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Runs entirely INSIDE the Docker container: docker exec gsb gsbctl COMMAND.
+# The CLI drops privileges so Wine and world saves are owned by the non-root gsb user.
+set -Eeuo pipefail
+usage() {
+  cat <<'USAGE'
+In-container God Save Birmingham management:
+  docker exec gsb gsbctl probe
+  docker exec gsb gsbctl windows
+  docker exec gsb gsbctl status
+  docker exec gsb gsbctl players
+  docker exec gsb gsbctl save
+  docker exec gsb gsbctl console
+  docker exec gsb gsbctl configure [--name "..."] [--max-players 8] ...
+  docker exec gsb gsbctl backup
+  docker stop -t 120 gsb     # graceful in-game save + shutdown
+  docker start gsb
+
+Caution: Console text is a snapshot and may include earlier responses.
+To stop, use docker stop; do NOT send an in-game shutdown separately when
+--restart unless-stopped is enabled (it can immediately restart the container).
+USAGE
+}
+[[ $# -ge 1 ]] || { usage; exit 2; }
+command="$1"; shift
+case "$command" in
+  probe|windows|status|players|save|console|configure|init|backup) ;;
+  help|--help|-h) usage; exit 0 ;;
+  *) usage >&2; exit 2 ;;
+esac
+# docker exec defaults to root and may bypass the main PID1 privilege drop.
+if [[ "$(id -u)" == 0 ]]; then
+  exec gosu gsb /usr/local/bin/gsbctl "$command" "$@"
+fi
+case "$command" in
+  probe|windows)
+    [[ $# == 0 ]] || { usage >&2; exit 2; }
+    exec /usr/local/bin/gsb-console "$command"
+    ;;
+  status|players|save)
+    [[ $# == 0 ]] || { usage >&2; exit 2; }
+    /usr/local/bin/gsb-console "$command"
+    sleep 2
+    echo '[gsbctl] Recognizable console responses (snapshot may include earlier replies):'
+    /usr/local/bin/gsb-read-console | python3 /usr/local/lib/gsb/gsb-format-console.py "$command"
+    ;;
+  console)
+    [[ $# == 0 ]] || { usage >&2; exit 2; }
+    exec /usr/local/bin/gsb-read-console
+    ;;
+  configure|init)
+    exec python3 /usr/local/lib/gsb/serverctl.py "$command" --server-dir /server "$@"
+    ;;
+  backup)
+    exec python3 /usr/local/lib/gsb/serverctl.py backup --server-dir /server "$@"
+    ;;
+esac
