@@ -22,7 +22,7 @@ done
 if [[ "${GSB_XVFB_ACTIVE:-0}" != "1" ]]; then
   export GSB_XVFB_ACTIVE=1
   echo "[gsb] Starting automatic virtual display (Xvfb)..."
-  exec xvfb-run -a -e /dev/stderr \
+  exec xvfb-run -a -e "$WINEPREFIX/gsb-xvfb.log" \
     -s "-screen 0 1280x800x24 -nolisten tcp" \
     /usr/local/bin/gsb-entrypoint
 fi
