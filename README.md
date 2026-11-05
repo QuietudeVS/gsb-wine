@@ -1,5 +1,7 @@
 # God Save Birmingham — Docker v10.1.0
 
+**** THIS WAS CREATED ENTIRELY BY AI! ****
+
 A **self-contained Linux/amd64 Docker image**, using Wine to run the Windows dedicated server. **No host-side setup scripts** and no host-side `gsbctl` required. Run by **one `docker run` command** or by the included **optional `compose.yaml`**.
 
 **Published image location (after releasing v10.1.0):** `ghcr.io/quietudevs/gsb-wine:v10.1.0`.
